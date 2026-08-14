@@ -8,6 +8,8 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from .normalize import normalize_key
+
 
 def new_id() -> str:
     return uuid.uuid4().hex
@@ -63,6 +65,16 @@ class MemoryRecord:
     superseded_by: str | None = None  # id of the record that replaced this one
     source: str | None = None  # provenance: session id, doc id, url...
     metadata: dict = field(default_factory=dict)
+    # canonical matching keys; auto-derived, but a superseding record adopts
+    # its predecessor's keys so a temporal chain never forks on spelling
+    subject_key: str | None = None
+    predicate_key: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.subject and self.subject_key is None:
+            self.subject_key = normalize_key(self.subject)
+        if self.predicate and self.predicate_key is None:
+            self.predicate_key = normalize_key(self.predicate)
 
     @property
     def is_valid(self) -> bool:

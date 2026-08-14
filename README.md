@@ -71,9 +71,13 @@ put MemFabric behind your API boundary (or run one DB per trust domain) and
 treat the allowlist as the enforcement point you control. Projects like
 Cognee enforce identity server-side; MemFabric deliberately stays a library.
 
-Supersede matches exact `(subject, predicate)` pairs. "Project X" and
-"ProjectX" are different subjects today. LLM extraction is prompted to
-normalize predicates, but entity resolution is on the roadmap, not in the box.
+Supersede matches canonical `(subject, predicate)` keys: case, punctuation,
+camelCase, and predicate style are normalized ("Project X" / "ProjectX" /
+"project_x" share one chain, as do "runs_on" / "RunsOn"), and a conservative
+fuzzy layer catches close typos (disable with
+`LocalStore(fuzzy_subjects=False)`). Genuinely different aliases are still
+different subjects: "the postgres db" and "PG main" fork into separate
+chains. Full entity resolution is not in the box.
 
 It is built for thousands to hundreds of thousands of memories, not millions.
 Vector search (when you plug in an embedder) is brute-force cosine. For
@@ -197,11 +201,23 @@ python -m unittest discover tests -v    # offline, no LLM, <2s
 
 ## Roadmap
 
-- Entity/predicate normalization so supersede survives naming drift
 - Consolidation pass ("reflect"): merge duplicates, promote episodic facts to semantic
 - Out-of-the-box embedders (Voyage, sentence-transformers) for the vector channel
 - Scope hierarchies (org inherits to team, team to user)
 - Async API and a thin auth-enforcing server wrapper
+
+Scaling past a single file, roughly in the order we'd take it:
+
+- WAL mode and an ANN vector index (sqlite-vec) to push the SQLite ceiling
+  from brute-force cosine toward millions of rows
+- A PostgreSQL backend (pgvector + tsvector) behind the same MemoryStore
+  protocol, for multi-process and multi-node deployments
+- Background ingestion: queue extraction and embedding off the hot path,
+  with batch embedding calls
+- Per-tenant database sharding, with the scope allowlist enforced by an
+  authenticating server layer instead of the caller
+- A Graphiti-backed graph channel feeding retrieval fusion for
+  relationship-heavy queries
 
 ## Credits
 

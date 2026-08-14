@@ -19,6 +19,7 @@ from typing import Literal, Sequence
 
 from .assembly import assemble_context
 from .llms import LLMUnavailable, MemoryLLM, auto_llm, create_llm
+from .normalize import normalize_key
 from .retrieval import HybridRetriever
 from .stores.base import MemoryStore
 from .stores.local_store import Embedder, LocalStore
@@ -94,6 +95,10 @@ class MemoryFabric:
             if active is not None:
                 if _same_object(active.object, object):
                     return active  # already known; no-op
+                # adopt the existing chain's canonical keys so history stays
+                # one chain even when the new spelling differs
+                record.subject_key = active.subject_key
+                record.predicate_key = active.predicate_key
                 self.store.invalidate(active.id, superseded_by=record.id)
         return self.store.add(record)
 
@@ -215,4 +220,4 @@ class MemoryFabric:
 def _same_object(a: str | None, b: str | None) -> bool:
     if a is None or b is None:
         return False
-    return a.strip().lower() == b.strip().lower()
+    return normalize_key(a) == normalize_key(b)

@@ -1,6 +1,6 @@
 [project]
 name = "memfabric"
-version = "0.1.0"
+version = "0.2.0"
 description = "Temporal, permission-scoped memory for AI agents in a single SQLite file. Model-agnostic; Mem0/Graphiti pluggable."
 readme = "README.md"
 requires-python = ">=3.11"

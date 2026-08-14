@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 from typing import Callable, Sequence
 
+from ..normalize import find_similar_key, normalize_key
 from ..types import MemoryRecord, MemoryType, Scope, ScopeRef
 
 Embedder = Callable[[list[str]], list[list[float]]]
@@ -33,6 +34,8 @@ CREATE TABLE IF NOT EXISTS memories (
     subject       TEXT,
     predicate     TEXT,
     object        TEXT,
+    subject_key   TEXT,
+    predicate_key TEXT,
     created_at    REAL NOT NULL,
     valid_from    REAL NOT NULL,
     valid_to      REAL,
@@ -54,14 +57,43 @@ class LocalStore:
         self,
         path: str | Path = "memfabric.db",
         embedder: Embedder | None = None,
+        fuzzy_subjects: bool = True,
     ):
         self.path = str(path)
         self.embedder = embedder
+        self.fuzzy_subjects = fuzzy_subjects
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
+        self._migrate()
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_factkey ON memories"
+            "(scope, scope_id, subject_key, predicate_key, valid_to)"
+        )
         self._fts_enabled = self._init_fts()
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Upgrade a pre-0.2 database in place: add the canonical key
+        columns and backfill them from existing facts."""
+        cols = {row[1] for row in self.conn.execute("PRAGMA table_info(memories)")}
+        if "subject_key" in cols:
+            return
+        self.conn.execute("ALTER TABLE memories ADD COLUMN subject_key TEXT")
+        self.conn.execute("ALTER TABLE memories ADD COLUMN predicate_key TEXT")
+        rows = self.conn.execute(
+            "SELECT id, subject, predicate FROM memories"
+            " WHERE subject IS NOT NULL OR predicate IS NOT NULL"
+        ).fetchall()
+        for row in rows:
+            self.conn.execute(
+                "UPDATE memories SET subject_key = ?, predicate_key = ? WHERE id = ?",
+                (
+                    normalize_key(row["subject"]) if row["subject"] else None,
+                    normalize_key(row["predicate"]) if row["predicate"] else None,
+                    row["id"],
+                ),
+            )
 
     def _init_fts(self) -> bool:
         # porter stemming so "deploy" matches "deploys"; without it the
@@ -80,8 +112,9 @@ class LocalStore:
     def add(self, record: MemoryRecord) -> MemoryRecord:
         self.conn.execute(
             "INSERT INTO memories (id, text, memory_type, scope, scope_id, subject,"
-            " predicate, object, created_at, valid_from, valid_to, superseded_by,"
-            " source, metadata) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " predicate, object, subject_key, predicate_key, created_at, valid_from,"
+            " valid_to, superseded_by, source, metadata)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 record.id,
                 record.text,
@@ -91,6 +124,8 @@ class LocalStore:
                 record.subject,
                 record.predicate,
                 record.object,
+                record.subject_key,
+                record.predicate_key,
                 record.created_at,
                 record.valid_from,
                 record.valid_to,
@@ -132,13 +167,30 @@ class LocalStore:
     def find_active_fact(
         self, scope: ScopeRef, subject: str, predicate: str
     ) -> MemoryRecord | None:
-        row = self.conn.execute(
-            "SELECT * FROM memories WHERE scope = ? AND scope_id = ? AND subject = ?"
-            " AND predicate = ? AND valid_to IS NULL"
-            " ORDER BY valid_from DESC LIMIT 1",
-            (scope[0].value, scope[1], subject, predicate),
-        ).fetchone()
+        skey, pkey = normalize_key(subject), normalize_key(predicate)
+        row = self._active_fact_by_keys(scope, skey, pkey)
+        if row is None and self.fuzzy_subjects:
+            candidates = [
+                r[0]
+                for r in self.conn.execute(
+                    "SELECT DISTINCT subject_key FROM memories WHERE scope = ?"
+                    " AND scope_id = ? AND predicate_key = ? AND valid_to IS NULL"
+                    " AND subject_key IS NOT NULL",
+                    (scope[0].value, scope[1], pkey),
+                )
+            ]
+            similar = find_similar_key(skey, candidates)
+            if similar is not None:
+                row = self._active_fact_by_keys(scope, similar, pkey)
         return _to_record(row) if row else None
+
+    def _active_fact_by_keys(self, scope: ScopeRef, skey: str, pkey: str):
+        return self.conn.execute(
+            "SELECT * FROM memories WHERE scope = ? AND scope_id = ?"
+            " AND subject_key = ? AND predicate_key = ? AND valid_to IS NULL"
+            " ORDER BY valid_from DESC, rowid DESC LIMIT 1",
+            (scope[0].value, scope[1], skey, pkey),
+        ).fetchone()
 
     def invalidate(
         self, memory_id: str, superseded_by: str | None = None
@@ -153,8 +205,8 @@ class LocalStore:
     def history(
         self, subject: str, predicate: str, scopes: Sequence[ScopeRef] | None = None
     ) -> list[MemoryRecord]:
-        sql = "SELECT * FROM memories WHERE subject = ? AND predicate = ?"
-        params: list = [subject, predicate]
+        sql = "SELECT * FROM memories WHERE subject_key = ? AND predicate_key = ?"
+        params: list = [normalize_key(subject), normalize_key(predicate)]
         clause, scope_params = _scope_clause(scopes)
         sql += clause
         params += scope_params
@@ -258,6 +310,8 @@ def _to_record(row: sqlite3.Row) -> MemoryRecord:
         subject=row["subject"],
         predicate=row["predicate"],
         object=row["object"],
+        subject_key=row["subject_key"],
+        predicate_key=row["predicate_key"],
         created_at=row["created_at"],
         valid_from=row["valid_from"],
         valid_to=row["valid_to"],
