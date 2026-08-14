@@ -52,7 +52,10 @@ def assemble_context(
     remaining = char_budget
     parts: list[str] = []
     for title, body in sections:
-        block = f"## {title}\n{close_tag.sub(r'<\\/\1', body)}"
+        # kept outside the f-string: backslashes in f-string expressions
+        # are a SyntaxError before Python 3.12
+        safe_body = close_tag.sub(r"<\\/\1", body)
+        block = f"## {title}\n{safe_body}"
         if len(block) > remaining:
             # truncate on a line boundary; a half bullet reads as a wrong fact
             cut = block[: max(remaining, 0)]
