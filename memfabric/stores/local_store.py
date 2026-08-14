@@ -64,10 +64,12 @@ class LocalStore:
         self.conn.commit()
 
     def _init_fts(self) -> bool:
+        # porter stemming so "deploy" matches "deploys"; without it the
+        # keyword channel misses trivial morphological variants
         try:
             self.conn.execute(
                 "CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts "
-                "USING fts5(id UNINDEXED, text)"
+                "USING fts5(id UNINDEXED, text, tokenize='porter unicode61')"
             )
             return True
         except sqlite3.OperationalError:
@@ -178,7 +180,8 @@ class LocalStore:
             match = " OR ".join(f'"{t}"' for t in tokens)
             rows = self.conn.execute(
                 "SELECT m.* FROM memories_fts f JOIN memories m ON m.id = f.id"
-                " WHERE memories_fts MATCH ? ORDER BY bm25(memories_fts) LIMIT ?",
+                " WHERE memories_fts MATCH ?"
+                " ORDER BY bm25(memories_fts), f.rowid LIMIT ?",
                 (match, limit * 5),
             ).fetchall()
         else:
@@ -205,7 +208,9 @@ class LocalStore:
         if types:
             sql += f" AND memory_type IN ({','.join('?' * len(types))})"
             params += [t.value for t in types]
-        sql += " ORDER BY created_at DESC LIMIT ?"
+        # rowid tiebreak: created_at values can tie within one clock tick
+        # (coarse timers on Windows), and tie order differs per platform
+        sql += " ORDER BY created_at DESC, rowid DESC LIMIT ?"
         params.append(limit)
         return [_to_record(r) for r in self.conn.execute(sql, params).fetchall()]
 
