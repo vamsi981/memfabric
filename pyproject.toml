@@ -1,0 +1,43 @@
+[project]
+name = "memfabric"
+version = "0.1.0"
+description = "Temporal, permission-scoped memory for AI agents in a single SQLite file. Model-agnostic; Mem0/Graphiti pluggable."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Vamsi Krishna" }]
+keywords = ["ai", "agents", "memory", "llm", "temporal", "knowledge-graph", "rag", "sqlite"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.60"]
+openai = ["openai>=1.40"]
+mcp = ["mcp>=1.0"]
+mem0 = ["mem0ai"]
+graphiti = ["graphiti-core"]
+dev = ["pytest"]
+
+[project.scripts]
+memfabric-mcp = "memfabric.mcp_server:main"
+
+[project.urls]
+Homepage = "https://github.com/vamsi981/memfabric"
+Issues = "https://github.com/vamsi981/memfabric/issues"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["memfabric*"]
