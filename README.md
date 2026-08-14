@@ -201,23 +201,11 @@ python -m unittest discover tests -v    # offline, no LLM, <2s
 
 ## Roadmap
 
-- Consolidation pass ("reflect"): merge duplicates, promote episodic facts to semantic
-- Out-of-the-box embedders (Voyage, sentence-transformers) for the vector channel
-- Scope hierarchies (org inherits to team, team to user)
-- Async API and a thin auth-enforcing server wrapper
-
-Scaling past a single file, roughly in the order we'd take it:
-
-- WAL mode and an ANN vector index (sqlite-vec) to push the SQLite ceiling
-  from brute-force cosine toward millions of rows
-- A PostgreSQL backend (pgvector + tsvector) behind the same MemoryStore
-  protocol, for multi-process and multi-node deployments
-- Background ingestion: queue extraction and embedding off the hot path,
-  with batch embedding calls
-- Per-tenant database sharding, with the scope allowlist enforced by an
-  authenticating server layer instead of the caller
-- A Graphiti-backed graph channel feeding retrieval fusion for
-  relationship-heavy queries
+The short version, in order: reflect() consolidation (dedup, promotion,
+pruning), embedders out of the box with sqlite-vec ANN, lifecycle and
+scope hierarchies, an auth-enforcing server layer, a PostgreSQL backend,
+and a Graphiti graph channel. Milestone scope and acceptance criteria are
+in [ROADMAP.md](ROADMAP.md).
 
 ## Credits
 
