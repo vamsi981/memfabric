@@ -64,6 +64,11 @@ class LocalStore:
         self.fuzzy_subjects = fuzzy_subjects
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        # WAL lets readers coexist with a writer (e.g. the MCP server sharing
+        # a db with the host app); busy_timeout waits briefly instead of
+        # failing with "database is locked"
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.executescript(_SCHEMA)
         self._migrate()
         self.conn.execute(
@@ -74,25 +79,31 @@ class LocalStore:
         self.conn.commit()
 
     def _migrate(self) -> None:
-        """Upgrade a pre-0.2 database in place: add the canonical key
-        columns and backfill them from existing facts."""
+        """Upgrade older databases in place: add the canonical key columns
+        (pre-0.2), then re-key rows whose keys are missing or empty — the
+        pre-0.2.1 ASCII-only normalizer produced "" for any non-Latin
+        subject or predicate, which merged unrelated facts into one chain."""
         cols = {row[1] for row in self.conn.execute("PRAGMA table_info(memories)")}
-        if "subject_key" in cols:
-            return
-        self.conn.execute("ALTER TABLE memories ADD COLUMN subject_key TEXT")
-        self.conn.execute("ALTER TABLE memories ADD COLUMN predicate_key TEXT")
+        if "subject_key" not in cols:
+            self.conn.execute("ALTER TABLE memories ADD COLUMN subject_key TEXT")
+            self.conn.execute("ALTER TABLE memories ADD COLUMN predicate_key TEXT")
         rows = self.conn.execute(
-            "SELECT id, subject, predicate FROM memories"
-            " WHERE subject IS NOT NULL OR predicate IS NOT NULL"
+            "SELECT id, subject, predicate, subject_key, predicate_key FROM memories"
+            " WHERE (subject IS NOT NULL AND (subject_key IS NULL OR subject_key = ''))"
+            " OR (predicate IS NOT NULL AND (predicate_key IS NULL OR predicate_key = ''))"
         ).fetchall()
         for row in rows:
+            # only recompute the broken key; an intact one may be a canonical
+            # key adopted from a predecessor and must not change
+            skey = row["subject_key"] or (
+                normalize_key(row["subject"]) if row["subject"] else None
+            )
+            pkey = row["predicate_key"] or (
+                normalize_key(row["predicate"]) if row["predicate"] else None
+            )
             self.conn.execute(
                 "UPDATE memories SET subject_key = ?, predicate_key = ? WHERE id = ?",
-                (
-                    normalize_key(row["subject"]) if row["subject"] else None,
-                    normalize_key(row["predicate"]) if row["predicate"] else None,
-                    row["id"],
-                ),
+                (skey or None, pkey or None, row["id"]),
             )
 
     def _init_fts(self) -> bool:
@@ -110,6 +121,16 @@ class LocalStore:
     # -- write path ---------------------------------------------------------
 
     def add(self, record: MemoryRecord) -> MemoryRecord:
+        try:
+            self._insert(record)
+        except Exception:
+            self.conn.rollback()
+            raise
+        self.conn.commit()
+        return record
+
+    def _insert(self, record: MemoryRecord) -> None:
+        """Stage all writes for one record without committing."""
         self.conn.execute(
             "INSERT INTO memories (id, text, memory_type, scope, scope_id, subject,"
             " predicate, object, subject_key, predicate_key, created_at, valid_from,"
@@ -145,8 +166,6 @@ class LocalStore:
                 "INSERT OR REPLACE INTO embeddings (memory_id, vector) VALUES (?, ?)",
                 (record.id, json.dumps(vec)),
             )
-        self.conn.commit()
-        return record
 
     def get(self, memory_id: str) -> MemoryRecord | None:
         row = self.conn.execute(
@@ -164,10 +183,27 @@ class LocalStore:
 
     # -- temporal facts -----------------------------------------------------
 
+    def supersede(self, active_id: str, record: MemoryRecord) -> MemoryRecord:
+        """Close the old fact and insert its replacement in one transaction:
+        either both land or neither does."""
+        try:
+            self.conn.execute(
+                "UPDATE memories SET valid_to = ?, superseded_by = ? WHERE id = ?",
+                (time.time(), record.id, active_id),
+            )
+            self._insert(record)
+        except Exception:
+            self.conn.rollback()
+            raise
+        self.conn.commit()
+        return record
+
     def find_active_fact(
         self, scope: ScopeRef, subject: str, predicate: str
     ) -> MemoryRecord | None:
         skey, pkey = normalize_key(subject), normalize_key(predicate)
+        if not skey or not pkey:
+            return None  # no usable key (punctuation-only text); nothing to match
         row = self._active_fact_by_keys(scope, skey, pkey)
         if row is None and self.fuzzy_subjects:
             candidates = [
@@ -228,23 +264,24 @@ class LocalStore:
         tokens = re.findall(r"\w+", query.lower())
         if not tokens:
             return []
+        # filter in SQL, before LIMIT: post-filtering a capped result set
+        # would let matches from other scopes crowd out the caller's rows
+        filters, params = _filter_sql(scopes, types, include_invalid)
         if self._fts_enabled:
             match = " OR ".join(f'"{t}"' for t in tokens)
             rows = self.conn.execute(
                 "SELECT m.* FROM memories_fts f JOIN memories m ON m.id = f.id"
-                " WHERE memories_fts MATCH ?"
+                " WHERE memories_fts MATCH ?" + filters +
                 " ORDER BY bm25(memories_fts), f.rowid LIMIT ?",
-                (match, limit * 5),
+                [match, *params, limit],
             ).fetchall()
         else:
-            like = " OR ".join(["text LIKE ?"] * len(tokens))
+            like = " OR ".join(["m.text LIKE ?"] * len(tokens))
             rows = self.conn.execute(
-                f"SELECT * FROM memories WHERE {like} LIMIT ?",
-                [f"%{t}%" for t in tokens] + [limit * 5],
+                f"SELECT m.* FROM memories m WHERE ({like})" + filters + " LIMIT ?",
+                [f"%{t}%" for t in tokens] + params + [limit],
             ).fetchall()
-        records = [_to_record(r) for r in rows]
-        records = _filter(records, scopes, types, include_invalid)
-        return records[:limit]
+        return [_to_record(r) for r in rows]
 
     def search_recent(
         self,
@@ -252,19 +289,14 @@ class LocalStore:
         types: Sequence[MemoryType] | None = None,
         limit: int = 20,
     ) -> list[MemoryRecord]:
-        sql = "SELECT * FROM memories WHERE valid_to IS NULL"
-        params: list = []
-        clause, scope_params = _scope_clause(scopes)
-        sql += clause
-        params += scope_params
-        if types:
-            sql += f" AND memory_type IN ({','.join('?' * len(types))})"
-            params += [t.value for t in types]
+        filters, params = _filter_sql(scopes, types, include_invalid=False)
         # rowid tiebreak: created_at values can tie within one clock tick
         # (coarse timers on Windows), and tie order differs per platform
-        sql += " ORDER BY created_at DESC, rowid DESC LIMIT ?"
-        params.append(limit)
-        return [_to_record(r) for r in self.conn.execute(sql, params).fetchall()]
+        sql = (
+            "SELECT * FROM memories WHERE 1=1" + filters +
+            " ORDER BY created_at DESC, rowid DESC LIMIT ?"
+        )
+        return [_to_record(r) for r in self.conn.execute(sql, [*params, limit]).fetchall()]
 
     def search_vector(
         self,
@@ -331,6 +363,22 @@ def _scope_clause(scopes: Sequence[ScopeRef] | None) -> tuple[str, list]:
     return f" AND ({parts})", params
 
 
+def _filter_sql(
+    scopes: Sequence[ScopeRef] | None,
+    types: Sequence[MemoryType] | None,
+    include_invalid: bool,
+) -> tuple[str, list]:
+    """Validity + scope + type filters as a SQL fragment; every piece is
+    prefixed with AND, for appending after an existing WHERE condition."""
+    sql = "" if include_invalid else " AND valid_to IS NULL"
+    clause, params = _scope_clause(scopes)
+    sql += clause
+    if types:
+        sql += f" AND memory_type IN ({','.join('?' * len(types))})"
+        params = params + [t.value for t in types]
+    return sql, params
+
+
 def _passes(
     record: MemoryRecord,
     scopes: Sequence[ScopeRef] | None,
@@ -344,15 +392,6 @@ def _passes(
     if types is not None and record.memory_type not in list(types):
         return False
     return True
-
-
-def _filter(
-    records: list[MemoryRecord],
-    scopes: Sequence[ScopeRef] | None,
-    types: Sequence[MemoryType] | None,
-    include_invalid: bool,
-) -> list[MemoryRecord]:
-    return [r for r in records if _passes(r, scopes, types, include_invalid)]
 
 
 def _cosine(a: list[float], b: list[float]) -> float:

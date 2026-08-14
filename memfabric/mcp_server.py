@@ -104,17 +104,22 @@ def create_server(fabric: MemoryFabric | None = None):
     @server.tool()
     def recall(query: str, scopes: str = "", limit: int = 8) -> str:
         """Search memories (hybrid keyword+recency retrieval, currently-valid
-        facts only). scopes: comma-separated allowlist like
+        facts only). Each line is "score id description"; pass the id to
+        forget to delete that memory. scopes: comma-separated allowlist like
         "user:vamsi,team:platform"; empty uses the server's default scope."""
         hits = fabric.recall(query, scopes=_parse_scopes(scopes), limit=limit)
-        return "\n".join(f"{s.score:.4f} {s.record.describe()}" for s in hits) or "no matches"
+        return (
+            "\n".join(f"{s.score:.4f} {s.record.id} {s.record.describe()}" for s in hits)
+            or "no matches"
+        )
 
     @server.tool()
     def history(subject: str, predicate: str, scopes: str = "") -> str:
         """Show how a fact changed over time (full supersede chain, oldest
-        first), e.g. subject="Project X", predicate="runs_on"."""
+        first), e.g. subject="Project X", predicate="runs_on". Each line
+        starts with the memory id (usable with forget)."""
         chain = fabric.history(subject, predicate, scopes=_parse_scopes(scopes))
-        return "\n".join(r.describe() for r in chain) or "no history for that fact"
+        return "\n".join(f"{r.id} {r.describe()}" for r in chain) or "no history for that fact"
 
     @server.tool()
     def build_context(query: str, scopes: str = "", char_budget: int = 8000) -> str:

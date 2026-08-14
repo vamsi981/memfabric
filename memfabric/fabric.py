@@ -99,6 +99,11 @@ class MemoryFabric:
                 # one chain even when the new spelling differs
                 record.subject_key = active.subject_key
                 record.predicate_key = active.predicate_key
+                supersede = getattr(self.store, "supersede", None)
+                if supersede is not None:
+                    # one transaction: a failed insert must not leave the
+                    # old fact closed with no successor
+                    return supersede(active.id, record)
                 self.store.invalidate(active.id, superseded_by=record.id)
         return self.store.add(record)
 
@@ -220,4 +225,6 @@ class MemoryFabric:
 def _same_object(a: str | None, b: str | None) -> bool:
     if a is None or b is None:
         return False
-    return normalize_key(a) == normalize_key(b)
+    key_a, key_b = normalize_key(a), normalize_key(b)
+    # two keyless objects (punctuation-only) are not "the same fact"
+    return bool(key_a) and key_a == key_b

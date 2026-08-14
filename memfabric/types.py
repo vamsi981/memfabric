@@ -71,10 +71,12 @@ class MemoryRecord:
     predicate_key: str | None = None
 
     def __post_init__(self) -> None:
+        # "or None": punctuation-only text has no usable key, and an empty
+        # string must never participate in supersede matching
         if self.subject and self.subject_key is None:
-            self.subject_key = normalize_key(self.subject)
+            self.subject_key = normalize_key(self.subject) or None
         if self.predicate and self.predicate_key is None:
-            self.predicate_key = normalize_key(self.predicate)
+            self.predicate_key = normalize_key(self.predicate) or None
 
     @property
     def is_valid(self) -> bool:

@@ -10,16 +10,25 @@ from __future__ import annotations
 
 import difflib
 import re
+import unicodedata
 
 _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
-_WORDS = re.compile(r"[a-z0-9]+")
+
+
+def _is_key_char(ch: str) -> bool:
+    # alphanumerics in any script, plus combining marks so Indic vowel
+    # signs stay attached to their word ("రాముడు" is one key, not three)
+    return ch.isalnum() or unicodedata.category(ch).startswith("M")
 
 
 def normalize_key(text: str) -> str:
     """Canonical matching key: "ProjectX" -> "project x", "runs_on" ->
-    "runs on", "Azure-AI" -> "azure ai"."""
-    spaced = _CAMEL_BOUNDARY.sub(" ", text)
-    return " ".join(_WORDS.findall(spaced.casefold()))
+    "runs on", "Azure-AI" -> "azure ai". Works in any script; text with no
+    word characters at all yields "" (callers treat that as "no key")."""
+    composed = unicodedata.normalize("NFC", text)
+    spaced = _CAMEL_BOUNDARY.sub(" ", composed).casefold()
+    cleaned = "".join(ch if _is_key_char(ch) else " " for ch in spaced)
+    return " ".join(cleaned.split())
 
 
 def find_similar_key(

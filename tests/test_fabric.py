@@ -3,6 +3,8 @@
 Run from the repo root:  python -m unittest discover tests -v
 """
 
+import os
+import tempfile
 import unittest
 
 from memfabric import MemoryFabric, MemoryType, Scope
@@ -83,6 +85,17 @@ class TestScopes(unittest.TestCase):
         )
         self.assertEqual(len(results), 2)
 
+    def test_recall_survives_noisy_other_scopes(self):
+        fabric = make_fabric()
+        # matches in another scope must not crowd this scope's rows out of
+        # the SQL result window
+        for i in range(200):
+            fabric.remember(f"tennis note {i}", scope=Scope.USER, scope_id="bob")
+        fabric.remember("alice likes tennis", scope=Scope.USER, scope_id="alice")
+        results = fabric.recall("tennis", scopes=[(Scope.USER, "alice")], rerank=False)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].record.scope_id, "alice")
+
 
 class TestRecall(unittest.TestCase):
     def test_keyword_recall_finds_relevant(self):
@@ -105,6 +118,41 @@ class TestRecall(unittest.TestCase):
         record = fabric.remember("temporary secret preference")
         self.assertTrue(fabric.forget(record.id))
         self.assertFalse(fabric.recall("secret preference", rerank=False))
+
+
+class TestSupersedeAtomicity(unittest.TestCase):
+    def test_failed_insert_leaves_old_fact_valid(self):
+        calls = []
+
+        def flaky_embedder(texts):
+            calls.append(texts)
+            if len(calls) > 1:
+                raise RuntimeError("embedder down")
+            return [[0.0, 0.0, 1.0] for _ in texts]
+
+        fabric = MemoryFabric(
+            store=LocalStore(":memory:", embedder=flaky_embedder), llm=None
+        )
+        old = fabric.remember("v1", subject="X", predicate="runs_on", object="A")
+        with self.assertRaises(RuntimeError):
+            fabric.remember("v2", subject="X", predicate="runs_on", object="B")
+        stored = fabric.store.get(old.id)
+        self.assertTrue(stored.is_valid)
+        self.assertIsNone(stored.superseded_by)
+        self.assertEqual(fabric.store.count(), 1)
+
+
+class TestStoreConcurrencyDefaults(unittest.TestCase):
+    def test_file_backed_store_uses_wal(self):
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        try:
+            store = LocalStore(path)
+            mode = store.conn.execute("PRAGMA journal_mode").fetchone()[0]
+            self.assertEqual(mode.lower(), "wal")
+            store.close()
+        finally:
+            os.unlink(path)
 
 
 class TestFusion(unittest.TestCase):

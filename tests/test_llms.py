@@ -89,6 +89,13 @@ class TestPromptBasedParsing(unittest.TestCase):
 
         self.assertEqual(NoneLLM().rerank("q", ["a", "b"]), [0, 1])
 
+    def test_rerank_drops_duplicate_and_out_of_range_indices(self):
+        class DupLLM(BaseMemoryLLM):
+            def _structured(self, prompt, output_format):
+                return RerankResult(relevant_indices=[1, 1, 0, 5, 0])
+
+        self.assertEqual(DupLLM().rerank("q", ["a", "b"]), [1, 0])
+
 
 class TestProviderResolution(unittest.TestCase):
     def test_unknown_provider_raises(self):

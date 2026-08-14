@@ -103,7 +103,8 @@ class BaseMemoryLLM:
         )
         if result is None:
             return list(range(len(texts)))
-        return [i for i in result.relevant_indices if 0 <= i < len(texts)]
+        valid = (i for i in result.relevant_indices if 0 <= i < len(texts))
+        return list(dict.fromkeys(valid))  # models sometimes repeat an index
 
     def _structured(self, prompt: str, output_format: type[BaseModel]):
         raise NotImplementedError

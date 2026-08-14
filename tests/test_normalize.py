@@ -28,6 +28,17 @@ class TestNormalizeKey(unittest.TestCase):
         for variant in ("runs_on", "runs-on", "RunsOn", "runs on"):
             self.assertEqual(normalize_key(variant), "runs on")
 
+    def test_non_latin_scripts_keep_real_keys(self):
+        self.assertEqual(normalize_key("రాముడు"), "రాముడు")
+        self.assertNotEqual(normalize_key("రాముడు"), normalize_key("కృష్ణుడు"))
+        self.assertEqual(normalize_key("北京 大学"), "北京 大学")
+
+    def test_accented_text(self):
+        self.assertEqual(normalize_key("Café Déjà-Vu"), "café déjà vu")
+
+    def test_punctuation_only_has_no_key(self):
+        self.assertEqual(normalize_key("!!!"), "")
+
 
 class TestFindSimilarKey(unittest.TestCase):
     def test_typo_matches(self):
@@ -93,6 +104,32 @@ class TestSupersedeAcrossSpellings(unittest.TestCase):
         self.assertEqual([r.object for r in chain], ["A", "B", "C"])
 
 
+class TestUnicodeFacts(unittest.TestCase):
+    def test_non_latin_facts_keep_distinct_chains(self):
+        fabric = make_fabric()
+        rama = fabric.remember("రాముడు అయోధ్యలో ఉన్నాడు",
+                               subject="రాముడు", predicate="నివాసం", object="అయోధ్య")
+        krishna = fabric.remember("కృష్ణుడు ద్వారకలో ఉన్నాడు",
+                                  subject="కృష్ణుడు", predicate="నివాసం", object="ద్వారక")
+        self.assertTrue(fabric.store.get(rama.id).is_valid)
+        self.assertTrue(fabric.store.get(krishna.id).is_valid)
+
+    def test_non_latin_fact_supersedes_its_own_chain(self):
+        fabric = make_fabric()
+        old = fabric.remember("రాముడు అయోధ్యలో",
+                              subject="రాముడు", predicate="నివాసం", object="అయోధ్య")
+        new = fabric.remember("రాముడు అడవిలో",
+                              subject="రాముడు", predicate="నివాసం", object="అడవి")
+        self.assertEqual(fabric.store.get(old.id).superseded_by, new.id)
+
+    def test_punctuation_only_subjects_never_match(self):
+        fabric = make_fabric()
+        a = fabric.remember("weird a", subject="!!!", predicate="???", object="A")
+        b = fabric.remember("weird b", subject="...", predicate="---", object="B")
+        self.assertTrue(fabric.store.get(a.id).is_valid)
+        self.assertTrue(fabric.store.get(b.id).is_valid)
+
+
 _V01_SCHEMA = """
 CREATE TABLE memories (
     id            TEXT PRIMARY KEY,
@@ -139,6 +176,31 @@ class TestMigration(unittest.TestCase):
             new = fabric.remember("ProjectX moved on", subject="ProjectX",
                                   predicate="RunsOn", object="Azure Foundry")
             self.assertEqual(store.get("old1").superseded_by, new.id)
+            store.close()
+        finally:
+            os.unlink(path)
+
+    def test_empty_keys_from_ascii_normalizer_are_repaired(self):
+        # the pre-0.2.1 normalizer keyed all non-Latin facts as "", merging
+        # unrelated facts into one chain; opening the db must re-key them
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        try:
+            store = LocalStore(path)
+            store.conn.execute(
+                "INSERT INTO memories (id, text, memory_type, scope, scope_id,"
+                " subject, predicate, object, subject_key, predicate_key,"
+                " created_at, valid_from, metadata)"
+                " VALUES ('t1', 'రాముడు అయోధ్యలో', 'semantic', 'user', 'default',"
+                " 'రాముడు', 'నివాసం', 'అయోధ్య', '', '', 1.0, 1.0, '{}')"
+            )
+            store.conn.commit()
+            store.close()
+
+            store = LocalStore(path)
+            record = store.get("t1")
+            self.assertEqual(record.subject_key, "రాముడు")
+            self.assertEqual(record.predicate_key, "నివాసం")
             store.close()
         finally:
             os.unlink(path)
