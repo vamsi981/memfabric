@@ -1,6 +1,6 @@
 [project]
 name = "memfabric"
-version = "0.2.0"
+version = "0.2.1"
 description = "Temporal, permission-scoped memory for AI agents in a single SQLite file. Model-agnostic; Mem0/Graphiti pluggable."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-anthropic = ["anthropic>=0.60"]
+anthropic = ["anthropic>=0.77"]  # first release with client.messages.parse
 openai = ["openai>=1.40"]
 mcp = ["mcp>=1.0"]
 mem0 = ["mem0ai"]
