@@ -62,6 +62,78 @@ buffer), a context assembler that packs everything into one budgeted
 that exposes the whole thing to Claude Code, Claude Desktop, Cursor, or any
 other MCP client.
 
+## Architecture
+
+```mermaid
+flowchart TD
+    Agent["Your agent or app"]
+    MCP["MCP clients<br/>Claude Code, Claude Desktop, Cursor"]
+
+    Agent --> API
+    MCP -->|memfabric-mcp| API
+
+    subgraph Fabric["MemFabric"]
+        API["MemoryFabric API<br/>remember / ingest / recall / history / build_context"]
+        WM["Working memory<br/>goal blocks + recent turns"]
+
+        subgraph WritePath["Write path"]
+            EX["Fact extraction<br/>optional LLM"]
+            NK["Canonical keys<br/>case, camelCase, typos"]
+            TS["Temporal supersede<br/>close valid_to, keep history"]
+        end
+
+        subgraph ReadPath["Read path"]
+            SC["Scope allowlist<br/>user / session / agent / team / project / org"]
+            KW["Keyword<br/>FTS5 + porter"]
+            VC["Vector<br/>pluggable embedder"]
+            RC["Recency"]
+            FU["Reciprocal Rank Fusion"]
+            RR["LLM rerank<br/>optional"]
+            CA["Context assembly<br/>memory_context block"]
+        end
+
+        API --> EX --> NK --> TS
+        API --> SC
+        SC --> KW & VC & RC --> FU --> RR --> CA
+        WM --> CA
+    end
+
+    subgraph Stores["MemoryStore protocol (pluggable)"]
+        DB[("SQLite file<br/>default, zero infra")]
+        M0[("Mem0<br/>optional adapter")]
+        GR[("Graphiti<br/>optional adapter")]
+    end
+
+    subgraph Providers["LLM providers (all optional)"]
+        AN["Anthropic"]
+        OA["OpenAI-compatible<br/>OpenAI, Ollama, Groq, vLLM, LM Studio"]
+        BY["Your own class<br/>extract + rerank"]
+    end
+
+    TS --> DB
+    ReadPath -.->|reads| DB
+    EX -.-> Providers
+    RR -.-> Providers
+    CA --> Agent
+```
+
+Dashed lines are optional dependencies: every solid-line path works with no
+LLM and no external service. The temporal mechanism at the heart of it:
+
+```mermaid
+flowchart LR
+    R["fabric.recall()<br/>current facts only"]
+    H["fabric.history()<br/>full chain"]
+
+    F1["Project X runs_on Azure AI<br/>valid until 14 Aug 2026"]
+    F2["Project X runs_on Azure Foundry<br/>valid since 14 Aug 2026"]
+
+    F1 -->|superseded_by| F2
+    R --> F2
+    H -.-> F1
+    H -.-> F2
+```
+
 ## What it is not (read this before filing issues)
 
 Scopes are not security. The allowlist is an organizational primitive: your
