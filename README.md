@@ -1,5 +1,8 @@
 # MemFabric
 
+[![CI](https://github.com/vamsi981/memfabric/actions/workflows/ci.yml/badge.svg)](https://github.com/vamsi981/memfabric/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/memfabric)](https://pypi.org/project/memfabric/)
+
 Temporal, permission-scoped memory for AI agents, in a single SQLite file.
 
 Facts change. Most agent memory either overwrites the old fact and loses the
@@ -200,11 +203,11 @@ python -m unittest discover tests -v    # offline, no LLM, <2s
 - Scope hierarchies (org inherits to team, team to user)
 - Async API and a thin auth-enforcing server wrapper
 
-## Development
+## Credits
 
-Built with AI assistance and reviewed by a human. The design deliberately
-borrows from [Graphiti](https://github.com/getzep/graphiti) (temporal
-invalidation), [Mem0](https://github.com/mem0ai/mem0) (memory API shape), and
+The design deliberately borrows from
+[Graphiti](https://github.com/getzep/graphiti) (temporal invalidation),
+[Mem0](https://github.com/mem0ai/mem0) (memory API shape), and
 [Letta](https://github.com/letta-ai/letta) (working-memory blocks). The
 contribution is the combination, not the parts. Bug reports with failing
 tests are the most useful thing you can send.
