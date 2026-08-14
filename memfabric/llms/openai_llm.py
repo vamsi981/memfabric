@@ -13,7 +13,13 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from .base import BaseMemoryLLM, LLMUnavailable, parse_structured, schema_prompt
+from .base import (
+    BaseMemoryLLM,
+    LLMUnavailable,
+    is_permanent_error,
+    parse_structured,
+    schema_prompt,
+)
 
 DEFAULT_MODEL = "gpt-5-mini"
 
@@ -51,7 +57,9 @@ class OpenAICompatibleLLM(BaseMemoryLLM):
             )
             content = response.choices[0].message.content or ""
         except Exception as exc:
-            raise LLMUnavailable(f"OpenAI-compatible call failed: {exc}") from exc
+            if is_permanent_error(exc):
+                raise LLMUnavailable(f"OpenAI-compatible call failed: {exc}") from exc
+            return None  # transient (rate limit, overload, network); skip this call
         return parse_structured(content, output_format)
 
 

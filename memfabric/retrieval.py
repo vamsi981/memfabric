@@ -59,6 +59,9 @@ class HybridRetriever:
             "recency": self.store.search_recent(scopes, types, limit=limit),
         }
         fused = reciprocal_rank_fusion(channels)
+        # recency is a tiebreaker, not evidence: a record no query-driven
+        # channel surfaced is not a match, however recently it was stored
+        fused = [s for s in fused if any(o != "recency" for o in s.origins)]
         if rerank and self.llm is not None and len(fused) > 1:
             fused = self._rerank(query, fused)
         return fused[:limit]

@@ -9,9 +9,11 @@ provider is available (missing package, missing credentials, API errors), so
 the fabric stays usable offline and in tests.
 
 Error semantics:
-- `_structured()` returns None for a bad/refused single response (caller
-  falls back for that call only)
-- `_structured()` raises LLMUnavailable for transport/auth/import failures
+- `_structured()` returns None for a bad/refused single response or a
+  transient provider error such as a rate limit, overload, or network blip
+  (caller falls back for that call only; the provider stays armed)
+- `_structured()` raises LLMUnavailable only for failures that cannot
+  succeed on retry: missing package, bad credentials, unknown model
   (caller may disable the provider for the session)
 """
 
@@ -25,6 +27,18 @@ from pydantic import BaseModel, ValidationError
 
 class LLMUnavailable(RuntimeError):
     """Raised when the provider cannot be reached at all; callers fall back."""
+
+
+# auth, permission, and unknown-model errors; anything else (429 rate limit,
+# 529 overload, 5xx, timeouts) is worth trying again on the next call
+_PERMANENT_STATUS = {401, 403, 404}
+
+
+def is_permanent_error(exc: Exception) -> bool:
+    """True when retrying this session cannot help (misconfiguration),
+    False for transient provider trouble. Both the anthropic and openai
+    SDKs put the HTTP status on the exception's `status_code`."""
+    return getattr(exc, "status_code", None) in _PERMANENT_STATUS
 
 
 class ExtractedMemory(BaseModel):

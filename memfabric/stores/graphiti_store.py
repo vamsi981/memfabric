@@ -6,17 +6,37 @@ graph: episode ingestion, entity/relationship extraction, and edge
 invalidation all happen on its side.
 
 Verify method names against the installed graphiti-core version. The library
-is async-first, and this adapter bridges with asyncio.run(), so use it from
-sync code only (not inside a running event loop).
+is async-first; this adapter bridges to sync callers and also works from
+inside a running event loop (agent frameworks) by dispatching to a private
+background loop.
 """
 
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import datetime, timezone
 from typing import Sequence
 
 from ..types import MemoryRecord, MemoryType, Scope, ScopeRef
+
+_loop: asyncio.AbstractEventLoop | None = None
+_loop_lock = threading.Lock()
+
+
+def _run(coro):
+    """Run a coroutine from sync code. asyncio.run() raises inside a running
+    event loop, so in that case hand the coroutine to a background loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    global _loop
+    with _loop_lock:
+        if _loop is None:
+            _loop = asyncio.new_event_loop()
+            threading.Thread(target=_loop.run_forever, daemon=True).start()
+    return asyncio.run_coroutine_threadsafe(coro, _loop).result()
 
 
 class GraphitiStore:
@@ -35,12 +55,12 @@ class GraphitiStore:
                 "GraphitiStore requires 'graphiti-core': pip install graphiti-core"
             ) from exc
         self.graphiti = Graphiti(uri, user, password)
-        asyncio.run(self.graphiti.build_indices_and_constraints())
+        _run(self.graphiti.build_indices_and_constraints())
 
     def add(self, record: MemoryRecord) -> MemoryRecord:
         from graphiti_core.nodes import EpisodeType
 
-        asyncio.run(
+        _run(
             self.graphiti.add_episode(
                 name=record.id,
                 episode_body=record.text,
@@ -76,12 +96,12 @@ class GraphitiStore:
             if scopes
             else None
         )
-        edges = asyncio.run(
+        edges = _run(
             self.graphiti.search(query, group_ids=group_ids, num_results=limit)
         )
         records: list[MemoryRecord] = []
         for edge in edges:
-            scope, _, scope_id = (edge.group_id or "user::default").partition(":")
+            scope, _, scope_id = (edge.group_id or "user:default").partition(":")
             records.append(
                 MemoryRecord(
                     id=edge.uuid,

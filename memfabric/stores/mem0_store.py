@@ -55,7 +55,12 @@ class Mem0Store:
         raise NotImplementedError("Mem0Store does not support get-by-fabric-id")
 
     def delete(self, memory_id: str) -> bool:
-        self.memory.delete(memory_id)
+        """Delete by Mem0's own id (the id recall results carry), not the
+        fabric record id; Mem0 assigns ids inside its pipeline."""
+        try:
+            self.memory.delete(memory_id)
+        except Exception:
+            return False
         return True
 
     def search_keyword(

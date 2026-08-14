@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from .base import BaseMemoryLLM, LLMUnavailable
+from .base import BaseMemoryLLM, LLMUnavailable, is_permanent_error
 
 DEFAULT_MODEL = "claude-opus-5"
 
@@ -28,14 +28,23 @@ class AnthropicLLM(BaseMemoryLLM):
 
     def _structured(self, prompt: str, output_format: type[BaseModel]):
         try:
-            response = self.client.messages.parse(
+            parse = self.client.messages.parse
+        except AttributeError as exc:
+            raise LLMUnavailable(
+                "installed anthropic SDK has no messages.parse;"
+                " upgrade with: pip install -U anthropic"
+            ) from exc
+        try:
+            response = parse(
                 model=self.model,
                 max_tokens=4096,
                 messages=[{"role": "user", "content": prompt}],
                 output_format=output_format,
             )
         except Exception as exc:
-            raise LLMUnavailable(f"Anthropic call failed: {exc}") from exc
+            if is_permanent_error(exc):
+                raise LLMUnavailable(f"Anthropic call failed: {exc}") from exc
+            return None  # transient (rate limit, overload, network); skip this call
         if response.stop_reason == "refusal":
             return None
         return response.parsed_output

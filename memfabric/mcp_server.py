@@ -102,12 +102,16 @@ def create_server(fabric: MemoryFabric | None = None):
         return "\n".join(r.describe() for r in created) or "nothing stored"
 
     @server.tool()
-    def recall(query: str, scopes: str = "", limit: int = 8) -> str:
-        """Search memories (hybrid keyword+recency retrieval, currently-valid
-        facts only). Each line is "score id description"; pass the id to
-        forget to delete that memory. scopes: comma-separated allowlist like
-        "user:vamsi,team:platform"; empty uses the server's default scope."""
-        hits = fabric.recall(query, scopes=_parse_scopes(scopes), limit=limit)
+    def recall(query: str, scopes: str = "", limit: int = 8, rerank: bool = True) -> str:
+        """Search memories (hybrid retrieval over currently-valid memories;
+        recency only breaks ties). Each line is "score id description"; pass
+        the id to forget to delete that memory. scopes: comma-separated
+        allowlist like "user:vamsi,team:platform"; empty uses the server's
+        default scope. rerank: false skips the LLM rerank pass (faster and
+        free; only applies when an LLM provider is configured)."""
+        hits = fabric.recall(
+            query, scopes=_parse_scopes(scopes), limit=limit, rerank=rerank
+        )
         return (
             "\n".join(f"{s.score:.4f} {s.record.id} {s.record.describe()}" for s in hits)
             or "no matches"

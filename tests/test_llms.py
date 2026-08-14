@@ -97,6 +97,64 @@ class TestPromptBasedParsing(unittest.TestCase):
         self.assertEqual(DupLLM().rerank("q", ["a", "b"]), [1, 0])
 
 
+class FakeStatusError(Exception):
+    """Stands in for SDK errors, which carry the HTTP status_code."""
+
+    def __init__(self, status_code):
+        super().__init__(f"http {status_code}")
+        self.status_code = status_code
+
+
+class TestProviderErrorHandling(unittest.TestCase):
+    def _anthropic_llm(self, exc):
+        from memfabric.llms.anthropic_llm import AnthropicLLM
+
+        class Messages:
+            def parse(self, **kwargs):
+                raise exc
+
+        class Client:
+            messages = Messages()
+
+        return AnthropicLLM(client=Client())
+
+    def test_transient_error_skips_one_call_only(self):
+        llm = self._anthropic_llm(FakeStatusError(529))
+        self.assertEqual(llm.extract("hi"), [])  # falls back, no raise
+
+    def test_auth_error_raises_unavailable(self):
+        llm = self._anthropic_llm(FakeStatusError(401))
+        with self.assertRaises(LLMUnavailable):
+            llm.extract("hi")
+
+    def test_sdk_without_parse_raises_unavailable(self):
+        from memfabric.llms.anthropic_llm import AnthropicLLM
+
+        class OldMessages:
+            pass  # no parse method
+
+        class OldClient:
+            messages = OldMessages()
+
+        with self.assertRaises(LLMUnavailable):
+            AnthropicLLM(client=OldClient()).extract("hi")
+
+    def test_openai_transient_error_skips_one_call_only(self):
+        from memfabric.llms.openai_llm import OpenAICompatibleLLM
+
+        class Completions:
+            def create(self, **kwargs):
+                raise FakeStatusError(429)
+
+        class Chat:
+            completions = Completions()
+
+        class Client:
+            chat = Chat()
+
+        self.assertEqual(OpenAICompatibleLLM(client=Client()).extract("hi"), [])
+
+
 class TestProviderResolution(unittest.TestCase):
     def test_unknown_provider_raises(self):
         with self.assertRaises(ValueError):

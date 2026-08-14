@@ -7,6 +7,8 @@ so the most load-bearing context survives truncation.
 
 from __future__ import annotations
 
+import re
+
 from .types import MemoryType, ScoredMemory
 from .working_memory import WorkingMemory
 
@@ -43,12 +45,19 @@ def assemble_context(
     if not sections:
         return ""
 
+    # stored text is untrusted; a memory containing "</memory_context>"
+    # must not be able to close the wrapper and escape the block
+    close_tag = re.compile(rf"</(\s*{re.escape(tag)})", re.IGNORECASE)
+
     remaining = char_budget
     parts: list[str] = []
     for title, body in sections:
-        block = f"## {title}\n{body}"
+        block = f"## {title}\n{close_tag.sub(r'<\\/\1', body)}"
         if len(block) > remaining:
-            block = block[: max(remaining, 0)]
+            # truncate on a line boundary; a half bullet reads as a wrong fact
+            cut = block[: max(remaining, 0)]
+            newline = cut.rfind("\n")
+            block = cut[:newline] if newline > 0 else ""
         if block:
             parts.append(block)
             remaining -= len(block) + 2
